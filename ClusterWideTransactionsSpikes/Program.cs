@@ -14,12 +14,63 @@ namespace ClusterWideTransactionsSpikes
 
             var store = new DocumentStore()
             {
-                Urls = new []{"http://localhost:8080"},
+                Urls = new[] { "http://localhost:8080" },
                 Database = "ClusterWideTransactionsSpikes"
             }.Initialize();
 
             //simulates 10 messages coming in parallel all with different correlation IDs, and a duplicate
-            var knownCorrelationValues = new[] { 1,2,3,4,10,6,7,8,9,10 };
+            var knownCorrelationValues = new[] { 1, 2, 3, 4, 10, 6, 7, 8, 9, 10 };
+
+            //SimulateUsingCompareExchange(store, knownCorrelationValues);
+
+            SimulateNotUsingCompareExchange(store, knownCorrelationValues);
+
+            Console.WriteLine("Started...");
+            Console.Read();
+        }
+
+        static void SimulateNotUsingCompareExchange(IDocumentStore store, int[] knownCorrelationValues)
+        {
+            Parallel.ForEach(knownCorrelationValues, async i =>
+            {
+                using var session = store.OpenAsyncSession(new SessionOptions
+                {
+                    TransactionMode = TransactionMode.ClusterWide
+                });
+                try
+                {
+                    var sagaData = await session.LoadAsync<NewEmployeeSagaData>("NewEmployeeSagaDatas/" + i);
+                    if (sagaData != null)
+                    {
+                        Console.WriteLine($"Updating saga for {i}");
+
+                        sagaData.RandomValue = Guid.NewGuid().ToString() + DateTime.Now.Ticks;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Creating a new saga for {i}");
+
+                        await session.StoreAsync(new NewEmployeeSagaData()
+                        {
+                            Id = "NewEmployeeSagaDatas/" + i,
+                            CorrelationProperty = i.ToString(),
+                            FirstName = "John" + i,
+                            LastName = "Doe" + i
+                        });
+                    }
+
+                    await session.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed at Correlation {i}");
+                    Console.WriteLine(ex.Message);
+                }
+            });
+        }
+
+        static void SimulateUsingCompareExchange(IDocumentStore store, int[] knownCorrelationValues)
+        {
             Parallel.ForEach(knownCorrelationValues, async i =>
             {
                 using var session = store.OpenAsyncSession(new SessionOptions
@@ -42,12 +93,14 @@ namespace ClusterWideTransactionsSpikes
 
                         await session.CreateNewSagaData(new NewEmployeeSagaData()
                         {
-                            Id = Guid.NewGuid().ToString(),
+                            Id = "NewEmployeeSagaDatas/" + i,
                             CorrelationProperty = i.ToString(),
-                            FirstName = "John",
-                            LastName = "Doe"
+                            FirstName = "John" + i,
+                            LastName = "Doe" + i
                         });
                     }
+
+                    await session.SaveChangesAsync();
                 }
                 catch (Exception ex)
                 {
@@ -55,16 +108,13 @@ namespace ClusterWideTransactionsSpikes
                     Console.WriteLine(ex.Message);
                 }
             });
-
-            Console.WriteLine("Started...");
-            Console.Read();
         }
 
         static async Task<(CompareExchangeValue<string>, NewEmployeeSagaData)> GetSagaData(this IAsyncDocumentSession session, int correlationPropertyValue)
         {
             var ce = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<string>($"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{correlationPropertyValue}");
 
-            if (ce != null) 
+            if (ce != null)
             {
                 var docId = ce.Value;
                 var sagaData = await session.LoadAsync<NewEmployeeSagaData>(docId);
@@ -84,12 +134,10 @@ namespace ClusterWideTransactionsSpikes
 
             CompareExchangeResult<string> cmpXchgResult = session.Advanced.DocumentStore.Operations.Send(putOperation);
 
-            if (cmpXchgResult.Successful == false) 
+            if (cmpXchgResult.Successful == false)
             {
                 throw new Exception("Saga already updated by someone else.");
             }
-
-            await session.SaveChangesAsync();
         }
 
         static async Task CreateNewSagaData(this IAsyncDocumentSession session, NewEmployeeSagaData newEmployeeSagaData)
@@ -100,8 +148,6 @@ namespace ClusterWideTransactionsSpikes
             //it implies that there is no support for a message that comes in and activates 2 saga instances of the same type
             //which sounds reasonable
             session.Advanced.ClusterTransaction.CreateCompareExchangeValue($"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{newEmployeeSagaData.CorrelationProperty}", newEmployeeSagaData.Id);
-
-            await session.SaveChangesAsync();
 
             //Delete should be called only when deleting the saga instance (MarkAsComplete)
             //session.Advanced.ClusterTransaction.DeleteCompareExchangeValue(ce);
