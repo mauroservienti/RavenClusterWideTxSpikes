@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations.CompareExchange;
 using Raven.Client.Documents.Session;
+using Raven.Client.ServerWide.Operations;
 
 namespace ClusterWideTransactionsSpikes
 {
@@ -17,13 +18,17 @@ namespace ClusterWideTransactionsSpikes
                 Database = "ClusterWideTransactionsSpikes"
             }.Initialize();
 
-            //simulates 10 messages coming in parallel all with different correlation IDs
+            //simulates 10 messages coming in parallel all with different correlation IDs, and a duplicate
             var knownCorrelationValues = new[] { 1,2,3,4,10,6,7,8,9,10 };
             Parallel.ForEach(knownCorrelationValues, async i =>
             {
+                using var session = store.OpenAsyncSession(new SessionOptions
+                {
+                    TransactionMode = TransactionMode.ClusterWide
+                });
                 try
                 {
-                    var (compareExchange, sagaData, session) = await store.GetSagaData(i);
+                    var (compareExchange, sagaData) = await session.GetSagaData(i);
                     if (sagaData != null)
                     {
                         Console.WriteLine($"Updating saga for {i}");
@@ -35,7 +40,7 @@ namespace ClusterWideTransactionsSpikes
                     {
                         Console.WriteLine($"Creating a new saga for {i}");
 
-                        await store.CreateNewSagaData(new NewEmployeeSagaData()
+                        await session.CreateNewSagaData(new NewEmployeeSagaData()
                         {
                             Id = Guid.NewGuid().ToString(),
                             CorrelationProperty = i.ToString(),
@@ -55,14 +60,8 @@ namespace ClusterWideTransactionsSpikes
             Console.Read();
         }
 
-        static async Task<(CompareExchangeValue<string>, NewEmployeeSagaData, IAsyncDocumentSession)> GetSagaData(this IDocumentStore store, int correlationPropertyValue)
+        static async Task<(CompareExchangeValue<string>, NewEmployeeSagaData)> GetSagaData(this IAsyncDocumentSession session, int correlationPropertyValue)
         {
-            var sessionOptions = new SessionOptions
-            {
-                TransactionMode = TransactionMode.ClusterWide
-            };
-
-            var session = store.OpenAsyncSession(sessionOptions);
             var ce = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<string>($"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{correlationPropertyValue}");
 
             if (ce != null) 
@@ -70,10 +69,10 @@ namespace ClusterWideTransactionsSpikes
                 var docId = ce.Value;
                 var sagaData = await session.LoadAsync<NewEmployeeSagaData>(docId);
 
-                return (ce, sagaData, session);
+                return (ce, sagaData);
             }
 
-            return (null, null, session);
+            return (null, null);
         }
 
         static async Task UpdateSagaData(this IAsyncDocumentSession session, CompareExchangeValue<string> ce, NewEmployeeSagaData sagaData)
@@ -93,20 +92,14 @@ namespace ClusterWideTransactionsSpikes
             await session.SaveChangesAsync();
         }
 
-        static async Task CreateNewSagaData(this IDocumentStore store, NewEmployeeSagaData newEmployeeSagaData)
+        static async Task CreateNewSagaData(this IAsyncDocumentSession session, NewEmployeeSagaData newEmployeeSagaData)
         {
-            var sessionOptions = new SessionOptions
-            {
-                TransactionMode = TransactionMode.ClusterWide
-            };
-
-            using var session = store.OpenAsyncSession(sessionOptions);
             await session.StoreAsync(newEmployeeSagaData);
 
             //this is assuming that only 1 saga instance of type NewEmployeeSagaData can have the given correlation value
             //it implies that there is no support for a message that comes in and activates 2 saga instances of the same type
             //which sounds reasonable
-            var ce = session.Advanced.ClusterTransaction.CreateCompareExchangeValue($"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{newEmployeeSagaData.CorrelationProperty}", newEmployeeSagaData.Id);
+            session.Advanced.ClusterTransaction.CreateCompareExchangeValue($"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{newEmployeeSagaData.CorrelationProperty}", newEmployeeSagaData.Id);
 
             await session.SaveChangesAsync();
 
