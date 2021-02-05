@@ -22,8 +22,9 @@ namespace ClusterWideTransactionsSpikes
 
             var rand = new Random((int)DateTime.Now.Ticks);
 
-            var messages = Enumerable.Range(1, 1000).OrderBy(x => rand.Next());
-            var duplicates = Enumerable.Range(1, 1000).OrderBy(x => rand.Next());
+            var messages = Enumerable.Range(1, 10000).OrderBy(x => rand.Next());
+            var duplicates = new []{3, 7};
+            //var duplicates = Enumerable.Range(1, 1000).OrderBy(x => rand.Next());
 
             var knownCorrelationValues = messages.Concat(duplicates).OrderBy(x => rand.Next()).ToArray();
 
