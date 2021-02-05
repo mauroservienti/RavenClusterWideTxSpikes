@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations.CompareExchange;
@@ -9,7 +11,7 @@ namespace ClusterWideTransactionsSpikes
 {
     static class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
 
             var store = new DocumentStore()
@@ -18,96 +20,113 @@ namespace ClusterWideTransactionsSpikes
                 Database = "ClusterWideTransactionsSpikes"
             }.Initialize();
 
-            //simulates 10 messages coming in parallel all with different correlation IDs, and a duplicate
-            var knownCorrelationValues = new[] { 1, 2, 3, 4, 10, 6, 7, 8, 9, 10 };
+            var rand = new Random((int)DateTime.Now.Ticks);
 
-            //SimulateUsingCompareExchange(store, knownCorrelationValues);
+            var messages = Enumerable.Range(1, 1000).OrderBy(x => rand.Next());
+            var duplicates = Enumerable.Range(1, 1000).OrderBy(x => rand.Next());
 
-            SimulateNotUsingCompareExchange(store, knownCorrelationValues);
+            var knownCorrelationValues = messages.Concat(duplicates).OrderBy(x => rand.Next()).ToArray();
+
+            var collector = new List<string>();
 
             Console.WriteLine("Started...");
+
+            var tasks = new List<Task>();
+
+            foreach (var correlationValue in knownCorrelationValues)
+            {
+                var t = ProcessUsingCompareExchange(store, correlationValue, collector);
+                //var t = ProcessWithoutCompareExchange(store, correlationValue, collector);
+
+                tasks.Add(t);
+            }
+
+            await Task.WhenAll(tasks);
+
+            Console.WriteLine("Completed...");
+            Console.WriteLine("------------");
+            Console.WriteLine();
+
+            foreach (var item in collector)
+            {
+                Console.WriteLine(item);
+                Console.WriteLine();
+            }
+
             Console.Read();
         }
 
-        static void SimulateNotUsingCompareExchange(IDocumentStore store, int[] knownCorrelationValues)
+        static async Task ProcessWithoutCompareExchange(IDocumentStore store, int correlationValue, List<string> collector)
         {
-            Parallel.ForEach(knownCorrelationValues, async i =>
+            using var session = store.OpenAsyncSession(new SessionOptions
             {
-                using var session = store.OpenAsyncSession(new SessionOptions
-                {
-                    TransactionMode = TransactionMode.ClusterWide
-                });
-                try
-                {
-                    var sagaData = await session.LoadAsync<NewEmployeeSagaData>("NewEmployeeSagaDatas/" + i);
-                    if (sagaData != null)
-                    {
-                        Console.WriteLine($"Updating saga for {i}");
-
-                        sagaData.RandomValue = Guid.NewGuid().ToString() + DateTime.Now.Ticks;
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Creating a new saga for {i}");
-
-                        await session.StoreAsync(new NewEmployeeSagaData()
-                        {
-                            Id = "NewEmployeeSagaDatas/" + i,
-                            CorrelationProperty = i.ToString(),
-                            FirstName = "John" + i,
-                            LastName = "Doe" + i
-                        });
-                    }
-
-                    await session.SaveChangesAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed at Correlation {i}");
-                    Console.WriteLine(ex.Message);
-                }
+                TransactionMode = TransactionMode.ClusterWide
             });
+            try
+            {
+                var sagaData = await session.LoadAsync<NewEmployeeSagaData>("NewEmployeeSagaDatas/" + correlationValue);
+                if (sagaData != null)
+                {
+                    Console.WriteLine($"Updating saga for {correlationValue}");
+
+                    sagaData.RandomValue = Guid.NewGuid().ToString() + DateTime.Now.Ticks;
+                }
+                else
+                {
+                    Console.WriteLine($"Creating a new saga for {correlationValue}");
+
+                    await session.StoreAsync(new NewEmployeeSagaData()
+                    {
+                        Id = "NewEmployeeSagaDatas/" + correlationValue,
+                        CorrelationProperty = correlationValue.ToString(),
+                        FirstName = "John" + correlationValue,
+                        LastName = "Doe" + correlationValue
+                    });
+                }
+
+                await session.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                collector.Add($"Failed at Correlation {correlationValue}: {ex.Message}");
+            }
         }
 
-        static void SimulateUsingCompareExchange(IDocumentStore store, int[] knownCorrelationValues)
+        static async Task ProcessUsingCompareExchange(IDocumentStore store, int correlationValue, List<string> collector)
         {
-            Parallel.ForEach(knownCorrelationValues, async i =>
+            using var session = store.OpenAsyncSession(new SessionOptions
             {
-                using var session = store.OpenAsyncSession(new SessionOptions
-                {
-                    TransactionMode = TransactionMode.ClusterWide
-                });
-                try
-                {
-                    var (compareExchange, sagaData) = await session.GetSagaData(i);
-                    if (sagaData != null)
-                    {
-                        Console.WriteLine($"Updating saga for {i}");
-
-                        sagaData.RandomValue = Guid.NewGuid().ToString() + DateTime.Now.Ticks;
-                        await session.UpdateSagaData(compareExchange, sagaData);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Creating a new saga for {i}");
-
-                        await session.CreateNewSagaData(new NewEmployeeSagaData()
-                        {
-                            Id = "NewEmployeeSagaDatas/" + i,
-                            CorrelationProperty = i.ToString(),
-                            FirstName = "John" + i,
-                            LastName = "Doe" + i
-                        });
-                    }
-
-                    await session.SaveChangesAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed at Correlation {i}");
-                    Console.WriteLine(ex.Message);
-                }
+                TransactionMode = TransactionMode.ClusterWide
             });
+            try
+            {
+                var (compareExchange, sagaData) = await session.GetSagaData(correlationValue);
+                if (sagaData != null)
+                {
+                    Console.WriteLine($"Updating saga for {correlationValue}");
+
+                    sagaData.RandomValue = Guid.NewGuid().ToString() + DateTime.Now.Ticks;
+                    await session.UpdateSagaData(compareExchange, sagaData);
+                }
+                else
+                {
+                    Console.WriteLine($"Creating a new saga for {correlationValue}");
+
+                    await session.CreateNewSagaData(new NewEmployeeSagaData()
+                    {
+                        Id = "NewEmployeeSagaDatas/" + correlationValue,
+                        CorrelationProperty = correlationValue.ToString(),
+                        FirstName = "John" + correlationValue,
+                        LastName = "Doe" + correlationValue
+                    });
+                }
+
+                await session.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                collector.Add($"Failed at Correlation {correlationValue}: {ex.Message}");
+            }
         }
 
         static async Task<(CompareExchangeValue<string>, NewEmployeeSagaData)> GetSagaData(this IAsyncDocumentSession session, int correlationPropertyValue)
@@ -125,19 +144,21 @@ namespace ClusterWideTransactionsSpikes
             return (null, null);
         }
 
-        static async Task UpdateSagaData(this IAsyncDocumentSession session, CompareExchangeValue<string> ce, NewEmployeeSagaData sagaData)
+        static Task UpdateSagaData(this IAsyncDocumentSession session, CompareExchangeValue<string> currentCompareExchange, NewEmployeeSagaData sagaData)
         {
             var putOperation = new PutCompareExchangeValueOperation<string>(
                 key: $"transactions/{nameof(NewEmployeeSagaData.CorrelationProperty)}/{sagaData.CorrelationProperty}",
                 value: sagaData.Id,
-                index: ce.Index);
+                index: currentCompareExchange.Index);
 
             CompareExchangeResult<string> cmpXchgResult = session.Advanced.DocumentStore.Operations.Send(putOperation);
 
             if (cmpXchgResult.Successful == false)
             {
-                throw new Exception("Saga already updated by someone else.");
+                throw new Exception($"Saga already updated by someone else. cmpXchgResult.Index {cmpXchgResult.Index}, sent index {currentCompareExchange.Index}.");
             }
+
+            return Task.CompletedTask;
         }
 
         static async Task CreateNewSagaData(this IAsyncDocumentSession session, NewEmployeeSagaData newEmployeeSagaData)
