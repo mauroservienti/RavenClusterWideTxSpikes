@@ -45,14 +45,16 @@ namespace ClusterWideTransactionsSingleDocument
                 if (succeeded)
                 {
                     Console.WriteLine();
-                    Console.WriteLine("Execution completed");
-                    Console.WriteLine("--------------------------------------------------------------");
+                    Console.WriteLine("Execution completed, going to try again...");
+
                 }
             }
 
             Console.WriteLine();
+            Console.WriteLine("-----------------------------------------------------------------------------------------------------");
             Console.WriteLine($"Execution completed with errors for document '{sagaDataStableId}'");
-            Console.WriteLine("--------------------------------------------------------------");
+            Console.WriteLine("-----------------------------------------------------------------------------------------------------");
+            Console.WriteLine();
 
             var succeededUpdates = results.Where(r => r.Succeeded).ToList();
             var failedUpdates = results.Where(r => !r.Succeeded).ToList();
@@ -80,7 +82,7 @@ namespace ClusterWideTransactionsSingleDocument
 
             if (diff.Any())
             {
-                Console.WriteLine("Cannot find an update for the following indexes: ");
+                Console.WriteLine("Cannot find an update for the following index(es): ");
                 foreach (var idx in diff)
                 {
                     Console.WriteLine($"\t{idx}");
@@ -154,9 +156,9 @@ namespace ClusterWideTransactionsSingleDocument
 
                     await session.SaveChangesAsync();
 
-                    Console.WriteLine($"Index {index} updated successfully.");
+                    Console.WriteLine($"Index {index} updated successfully after {attempts} attempts.");
 
-                    return (true, index, String.Empty);
+                    return (true, index, string.Empty);
                 }
                 catch (Exception ex)
                 {
