@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations.CompareExchange;
@@ -11,7 +12,9 @@ namespace ClusterWideTransactionsSingleDocument
     class Program
     {
         const string sagaDataIdPrefix = "SampleSagaDatas";
-        private const string sagaDataCevPrefix = "cev";
+        const string sagaDataCevPrefix = "cev";
+        const int numberOfConcurrentUpdates = 50;
+        const int maxRetryAttempts = 50;
 
         static async Task Main(string[] args)
         {
@@ -35,21 +38,62 @@ namespace ClusterWideTransactionsSingleDocument
             storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
             await storeItOnceSession.SaveChangesAsync();
 
-            var pendingTasks = new List<Task>();
-            for (var i = 0; i < 10; i++)
+            var pendingTasks = new List<Task<(bool Succeeded, int Index, string ErrorMessage)>>();
+            for (var i = 0; i < numberOfConcurrentUpdates; i++)
             {
                 pendingTasks.Add(TouchSaga(i, store, sagaDataStableId));
             }
 
-            await Task.WhenAll(pendingTasks);
+            var results = await Task.WhenAll(pendingTasks);
+
+            Console.WriteLine();
+            Console.WriteLine("Execution completed");
+            Console.WriteLine("--------------------------------------------------------------");
+
+            var succeededUpdates = results.Where(r => r.Succeeded).ToList();
+            var failedUpdates = results.Where(r => !r.Succeeded).ToList();
+
+            if (failedUpdates.Any())
+            {
+                Console.WriteLine($"{failedUpdates.Count} updated failed.");
+                foreach (var failure in failedUpdates)
+                {
+                    Console.WriteLine($"\t{failure.ErrorMessage}");
+                }
+            }
+
+            using var checkSession = store.OpenAsyncSession();
+            var sagaData = await checkSession.LoadAsync<SampleSagaData>(sagaDataStableId);
+
+            Console.WriteLine($"# of indexes stored in the document:\t{sagaData.HandledIndexes.Count}");
+            Console.WriteLine($"# of reported successful updates:\t{succeededUpdates.Count}");
+            Console.WriteLine();
+
+            var diff = Enumerable.Range(0, numberOfConcurrentUpdates - 1)
+                .Except(failedUpdates.Select(fu=>fu.Index))
+                .Except(sagaData.HandledIndexes)
+                .ToList();
+
+            if (diff.Any())
+            {
+                Console.WriteLine("Cannot find an update for the following indexes: ");
+                foreach (var idx in diff)
+                {
+                    Console.WriteLine($"\t{idx}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("Found all expected indexes.");
+            }
         }
 
-        private static async Task TouchSaga(int index, IDocumentStore store, string sagaDataStableId)
+        private static async Task<(bool, int, string)> TouchSaga(int index, IDocumentStore store, string sagaDataStableId)
         {
             var attempts = 0;
             Exception lastError = null;
 
-            while (attempts <= 10)
+            while (attempts <= maxRetryAttempts)
             {
                 try
                 {
@@ -59,14 +103,14 @@ namespace ClusterWideTransactionsSingleDocument
                     var sagaData = await session.LoadAsync<SampleSagaData>(sagaDataStableId);
                     var cev = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<string>($"{sagaDataCevPrefix}/{sagaDataStableId}");
 
-                    sagaData.HandledMessages.Add(index);
+                    sagaData.HandledIndexes.Add(index);
                     session.Advanced.ClusterTransaction.UpdateCompareExchangeValue(new CompareExchangeValue<string>($"{sagaDataCevPrefix}/{sagaDataStableId}", cev.Index, sagaDataStableId));
 
                     await session.SaveChangesAsync();
 
                     Console.WriteLine($"Index {index} updated successfully.");
 
-                    return;
+                    return (true, index, String.Empty);
                 }
                 catch (Exception ex)
                 {
@@ -76,6 +120,8 @@ namespace ClusterWideTransactionsSingleDocument
             }
 
             Console.WriteLine($"Failed after {attempts} attempts, while handling index {index}, last error: {lastError?.Message}");
+
+            return (false, index, $"Failed after {attempts} attempts, while handling index {index}, last error: {lastError?.Message}");
         }
 
         public static async Task DeleteDatabase(IDocumentStore store)
@@ -106,6 +152,6 @@ namespace ClusterWideTransactionsSingleDocument
     class SampleSagaData
     {
         public string Id { get; set; }
-        public List<int> HandledMessages { get; set; } = new List<int>();
+        public List<int> HandledIndexes { get; set; } = new List<int>();
     }
 }
