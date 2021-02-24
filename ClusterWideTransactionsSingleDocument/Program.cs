@@ -11,6 +11,10 @@ namespace ClusterWideTransactionsSingleDocument
 {
     class Program
     {
+        //database must exist and must be replicated across nodes
+        static readonly string[] clusterNodesUrls = new[] {"http://localhost:8080", "http://localhost:8084", "http://localhost:52891"};
+        const string dbName = "ClusterWideTransactionsSingleDocument";
+
         const string sagaDataIdPrefix = "SampleSagaDatas";
         const string sagaDataCevPrefix = "cev";
         const int numberOfConcurrentUpdates = 50;
@@ -18,10 +22,9 @@ namespace ClusterWideTransactionsSingleDocument
 
         static async Task Main(string[] args)
         {
-            var dbName = "ClusterWideTransactionsSingleDocument";
             var store = new DocumentStore()
             {
-                Urls = new[] { "http://localhost:8080", "http://localhost:8084", "http://localhost:52891" },
+                Urls = clusterNodesUrls,
                 Database = dbName
             }.Initialize();
 
@@ -30,13 +33,16 @@ namespace ClusterWideTransactionsSingleDocument
             // store.Maintenance.Server.Send(new CreateDatabaseOperation(dbRecord));
 
             var sagaDataStableId = sagaDataIdPrefix + "/" + Guid.NewGuid();
-            Console.WriteLine($"Saga stable ID: {sagaDataStableId}");
+            Console.WriteLine($"Test document ID: {sagaDataStableId}");
 
             using var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide});
             storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
             await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
             storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
             await storeItOnceSession.SaveChangesAsync();
+
+            Console.WriteLine($"Test document created. Ready to try to concurrently update document {numberOfConcurrentUpdates} times.");
+            Console.WriteLine();
 
             var pendingTasks = new List<Task<(bool Succeeded, int Index, string ErrorMessage)>>();
             for (var i = 0; i < numberOfConcurrentUpdates; i++)
