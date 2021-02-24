@@ -40,7 +40,8 @@ namespace ClusterWideTransactionsSingleDocument
             {
                 sagaDataStableId = sagaDataIdPrefix + "/" + Guid.NewGuid();
                 results = await Execute(store, sagaDataStableId);
-                succeeded = results.All(r => r.Succeeded);
+
+                succeeded = await ValidateResults(store, sagaDataStableId, results);
                 if (succeeded)
                 {
                     Console.WriteLine();
@@ -89,6 +90,21 @@ namespace ClusterWideTransactionsSingleDocument
             {
                 Console.WriteLine("Found all expected indexes.");
             }
+        }
+
+        private static async Task<bool> ValidateResults(IDocumentStore store, string sagaDataStableId, (bool Succeeded, int Index, string ErrorMessage)[] results)
+        {
+            using var checkSession = store.OpenAsyncSession();
+            var sagaData = await checkSession.LoadAsync<SampleSagaData>(sagaDataStableId);
+
+            var updatesFailedDueToConcurrency = results.Where(r => !r.Succeeded).ToList();
+
+            var diff = Enumerable.Range(0, numberOfConcurrentUpdates - 1)
+                .Except(updatesFailedDueToConcurrency.Select(fu=>fu.Index))
+                .Except(sagaData.HandledIndexes)
+                .ToList();
+
+            return diff.Count == 0;
         }
 
         static async Task<(bool, int, string)[]> Execute(IDocumentStore store, string sagaDataStableId)
