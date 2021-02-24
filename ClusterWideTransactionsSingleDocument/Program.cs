@@ -152,7 +152,18 @@ namespace ClusterWideTransactionsSingleDocument
                     var cev = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<string>($"{sagaDataCevPrefix}/{sagaDataStableId}");
 
                     sagaData.HandledIndexes.Add(index);
-                    session.Advanced.ClusterTransaction.UpdateCompareExchangeValue(new CompareExchangeValue<string>($"{sagaDataCevPrefix}/{sagaDataStableId}", cev.Index, sagaDataStableId));
+
+                    var putOperation = new PutCompareExchangeValueOperation<string>(
+                        key: $"{sagaDataCevPrefix}/{sagaDataStableId}",
+                        value: sagaData.Id,
+                        index: cev.Index);
+
+                    CompareExchangeResult<string> cmpXchgResult = session.Advanced.DocumentStore.Operations.Send(putOperation);
+
+                    if (cmpXchgResult.Successful == false)
+                    {
+                        throw new Exception($"Saga already updated by someone else. cmpXchgResult.Index {cmpXchgResult.Index}, sent index {cev.Index}.");
+                    }
 
                     await session.SaveChangesAsync();
 
