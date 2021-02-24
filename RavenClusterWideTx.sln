@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClusterWideTransactionsSpikes", "ClusterWideTransactionsSpikes\ClusterWideTransactionsSpikes.csproj", "{2F4990F9-173D-4F18-8516-87900423DB33}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClusterWideTransactionsSingleDocument", "ClusterWideTransactionsSingleDocument\ClusterWideTransactionsSingleDocument.csproj", "{F08F1834-1103-4BA4-A641-261E8310A3C1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +14,9 @@ Global
 		{2F4990F9-173D-4F18-8516-87900423DB33}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2F4990F9-173D-4F18-8516-87900423DB33}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2F4990F9-173D-4F18-8516-87900423DB33}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F08F1834-1103-4BA4-A641-261E8310A3C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F08F1834-1103-4BA4-A641-261E8310A3C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F08F1834-1103-4BA4-A641-261E8310A3C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F08F1834-1103-4BA4-A641-261E8310A3C1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
