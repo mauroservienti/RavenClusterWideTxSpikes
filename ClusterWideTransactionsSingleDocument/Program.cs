@@ -32,28 +32,25 @@ namespace ClusterWideTransactionsSingleDocument
             // var dbRecord = new DatabaseRecord(dbName);
             // store.Maintenance.Server.Send(new CreateDatabaseOperation(dbRecord));
 
-            var sagaDataStableId = sagaDataIdPrefix + "/" + Guid.NewGuid();
-            Console.WriteLine($"Test document ID: {sagaDataStableId}");
+            (bool Succeeded, int Index, string ErrorMessage)[] results = null;
+            var succeeded = true;
+            string sagaDataStableId = null;
 
-            using var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide});
-            storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
-            await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
-            storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
-            await storeItOnceSession.SaveChangesAsync();
-
-            Console.WriteLine($"Test document created. Ready to try to concurrently update document {numberOfConcurrentUpdates} times.");
-            Console.WriteLine();
-
-            var pendingTasks = new List<Task<(bool Succeeded, int Index, string ErrorMessage)>>();
-            for (var i = 0; i < numberOfConcurrentUpdates; i++)
+            while (succeeded)
             {
-                pendingTasks.Add(TouchSaga(i, store, sagaDataStableId));
+                sagaDataStableId = sagaDataIdPrefix + "/" + Guid.NewGuid();
+                results = await Execute(store, sagaDataStableId);
+                succeeded = results.All(r => r.Succeeded);
+                if (succeeded)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Execution completed");
+                    Console.WriteLine("--------------------------------------------------------------");
+                }
             }
 
-            var results = await Task.WhenAll(pendingTasks);
-
             Console.WriteLine();
-            Console.WriteLine("Execution completed");
+            Console.WriteLine($"Execution completed with errors for document '{sagaDataStableId}'");
             Console.WriteLine("--------------------------------------------------------------");
 
             var succeededUpdates = results.Where(r => r.Succeeded).ToList();
@@ -94,7 +91,31 @@ namespace ClusterWideTransactionsSingleDocument
             }
         }
 
-        private static async Task<(bool, int, string)> TouchSaga(int index, IDocumentStore store, string sagaDataStableId)
+        static async Task<(bool, int, string)[]> Execute(IDocumentStore store, string sagaDataStableId)
+        {
+            Console.WriteLine($"Test document ID: {sagaDataStableId}");
+
+            using var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide});
+            storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
+            await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
+            storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
+            await storeItOnceSession.SaveChangesAsync();
+
+            Console.WriteLine($"Test document created. Ready to try to concurrently update document {numberOfConcurrentUpdates} times.");
+            Console.WriteLine();
+
+            var pendingTasks = new List<Task<(bool Succeeded, int Index, string ErrorMessage)>>();
+            for (var i = 0; i < numberOfConcurrentUpdates; i++)
+            {
+                pendingTasks.Add(TouchSaga(i, store, sagaDataStableId));
+            }
+
+            var results = await Task.WhenAll(pendingTasks);
+
+            return results;
+        }
+
+        static async Task<(bool, int, string)> TouchSaga(int index, IDocumentStore store, string sagaDataStableId)
         {
             var attempts = 0;
             Exception lastError = null;
