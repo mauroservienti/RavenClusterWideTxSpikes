@@ -111,11 +111,14 @@ namespace ClusterWideTransactionsSingleDocument
         {
             Console.WriteLine($"Test document ID: {sagaDataStableId}");
 
-            using var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide});
-            storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
-            await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
-            storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
-            await storeItOnceSession.SaveChangesAsync();
+            using (var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide}))
+            {
+                storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
+
+                await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
+                storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
+                await storeItOnceSession.SaveChangesAsync();
+            }
 
             Console.WriteLine($"Test document created. Ready to try to concurrently update document {numberOfConcurrentUpdates} times.");
             Console.WriteLine();
