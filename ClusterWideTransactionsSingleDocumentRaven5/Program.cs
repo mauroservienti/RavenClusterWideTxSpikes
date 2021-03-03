@@ -116,8 +116,16 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
             {
                 storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
 
-                await storeItOnceSession.StoreAsync(new SampleSagaData() {Id = sagaDataStableId});
-                storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", sagaDataStableId);
+                await storeItOnceSession.StoreAsync(new SampleSagaData()
+                {
+                    Id = sagaDataStableId,
+                    SyncGuid = Guid.Empty.ToString()
+                });
+                storeItOnceSession.Advanced.ClusterTransaction.CreateCompareExchangeValue($"{sagaDataCevPrefix}/{sagaDataStableId}", new SampleSagaDataCevValue
+                {
+                    Id = sagaDataStableId,
+                    SyncGuid = Guid.Empty.ToString()
+                });
                 await storeItOnceSession.SaveChangesAsync();
             }
 
@@ -148,11 +156,19 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
                     session.Advanced.UseOptimisticConcurrency = false;
 
                     var sagaData = await session.LoadAsync<SampleSagaData>(sagaDataStableId);
-                    var cev = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<string>($"{sagaDataCevPrefix}/{sagaDataStableId}");
+                    var cev = await session.Advanced.ClusterTransaction.GetCompareExchangeValueAsync<SampleSagaDataCevValue>($"{sagaDataCevPrefix}/{sagaDataStableId}");
 
+                    // handle concurrency between the reads
+                    if (sagaData.SyncGuid != cev.Value.SyncGuid)
+                    {
+                        throw new Exception("Saga and compare exchange value are out of sync."); //retry
+                    }
+
+                    var newSyncGuid = Guid.NewGuid().ToString();
                     sagaData.HandledIndexes.Add(index);
 
-                    cev.Value = sagaData.Id;
+                    cev.Value.SyncGuid = newSyncGuid;
+                    sagaData.SyncGuid = newSyncGuid;
 
                     await session.SaveChangesAsync();
 
@@ -200,6 +216,13 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
     class SampleSagaData
     {
         public string Id { get; set; }
+        public string SyncGuid { get; set; }
         public List<int> HandledIndexes { get; set; } = new List<int>();
+    }
+
+    class SampleSagaDataCevValue
+    {
+        public string Id { get; set; }
+        public string SyncGuid { get; set; }
     }
 }
