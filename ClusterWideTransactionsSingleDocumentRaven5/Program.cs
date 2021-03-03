@@ -3,11 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Raven.Client.Documents;
-using Raven.Client.Documents.Operations.CompareExchange;
 using Raven.Client.Documents.Session;
 using Raven.Client.ServerWide.Operations;
 
-namespace ClusterWideTransactionsSingleDocument
+namespace ClusterWideTransactionsSingleDocumentRaven5
 {
     class Program
     {
