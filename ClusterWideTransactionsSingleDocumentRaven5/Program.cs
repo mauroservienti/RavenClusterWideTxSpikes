@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Raven.Client;
 using Raven.Client.Documents;
+using Raven.Client.Documents.Operations.Expiration;
 using Raven.Client.Documents.Session;
 using Raven.Client.ServerWide.Operations;
 
@@ -20,6 +22,15 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
         const int numberOfConcurrentUpdates = 50;
         const int maxRetryAttempts = 50;
 
+        static void EnableExpirationFeature(IDocumentStore documentStore)
+        {
+            documentStore.Maintenance.Send(new ConfigureExpirationOperation(new ExpirationConfiguration
+            {
+                Disabled = false,
+                DeleteFrequencyInSec = 600
+            }));
+        }
+
         static async Task Main(string[] args)
         {
             var store = new DocumentStore()
@@ -31,6 +42,8 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
             // await DeleteDatabase(store);
             // var dbRecord = new DatabaseRecord(dbName);
             // store.Maintenance.Server.Send(new CreateDatabaseOperation(dbRecord));
+
+            EnableExpirationFeature(store);
 
             (bool Succeeded, int Index, string ErrorMessage)[] results = null;
             var succeeded = true;
@@ -76,7 +89,7 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
             Console.WriteLine();
 
             var diff = Enumerable.Range(0, numberOfConcurrentUpdates - 1)
-                .Except(failedUpdates.Select(fu=>fu.Index))
+                .Except(failedUpdates.Select(fu => fu.Index))
                 .Except(sagaData.HandledIndexes)
                 .ToList();
 
@@ -102,7 +115,7 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
             var updatesFailedDueToConcurrency = results.Where(r => !r.Succeeded).ToList();
 
             var diff = Enumerable.Range(0, numberOfConcurrentUpdates - 1)
-                .Except(updatesFailedDueToConcurrency.Select(fu=>fu.Index))
+                .Except(updatesFailedDueToConcurrency.Select(fu => fu.Index))
                 .Except(sagaData.HandledIndexes)
                 .ToList();
 
@@ -113,14 +126,16 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
         {
             Console.WriteLine($"Test document ID: {sagaDataStableId}");
 
-            using (var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide}))
+            using (var storeItOnceSession = store.OpenAsyncSession(new SessionOptions() { TransactionMode = TransactionMode.ClusterWide }))
             {
                 storeItOnceSession.Advanced.UseOptimisticConcurrency = false;
 
-                await storeItOnceSession.StoreAsync(new SampleSagaData()
+                var sampleSagaData = new SampleSagaData()
                 {
                     Id = sagaDataStableId,
-                });
+                };
+                await storeItOnceSession.StoreAsync(sampleSagaData);
+                storeItOnceSession.Advanced.GetMetadataFor(sampleSagaData)[Constants.Documents.Metadata.Expires] = DateTime.UtcNow + TimeSpan.FromMinutes(10);
                 await storeItOnceSession.SaveChangesAsync();
             }
 
@@ -147,7 +162,7 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
             {
                 try
                 {
-                    using var session = store.OpenAsyncSession(new SessionOptions() {TransactionMode = TransactionMode.ClusterWide});
+                    using var session = store.OpenAsyncSession(new SessionOptions() { TransactionMode = TransactionMode.ClusterWide });
                     session.Advanced.UseOptimisticConcurrency = false;
 
                     var sagaData = await session.LoadAsync<SampleSagaData>(sagaDataStableId);
@@ -155,6 +170,7 @@ namespace ClusterWideTransactionsSingleDocumentRaven5
                     var newSyncGuid = Guid.NewGuid().ToString();
                     sagaData.HandledIndexes.Add(index);
 
+                    session.Advanced.GetMetadataFor(sagaData)[Constants.Documents.Metadata.Expires] = DateTime.UtcNow + TimeSpan.FromMinutes(10);
                     await session.SaveChangesAsync();
 
                     Console.WriteLine($"Index {index} updated successfully after {attempts} attempts.");
